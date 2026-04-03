@@ -16,7 +16,7 @@ homepage = "https://github.com/tritoke/nist-drbg-rs"
 repository = "https://github.com/tritoke/nist-drbg-rs"
 
 [features]
-default = ["hash-drbg", "hmac-drbg", "ctr-drbg"]
+default = ["hash-drbg", "hmac-drbg", "ctr-drbg", "try-crypto-rng"]
 hash-drbg = ["sha1", "sha2"]
 sha1 = ["dep:sha1", "dep:digest"]
 sha2 = ["dep:sha2", "dep:digest"]
@@ -26,6 +26,7 @@ hmac-sha2 = ["dep:hmac", "dep:sha2", "dep:digest"]
 ctr-drbg = ["aes-ctr", "tdea-ctr"]
 aes-ctr = ["dep:aes"]
 tdea-ctr = ["dep:des"]
+try-crypto-rng = ["dep:rand_core"]
 
 [dependencies]
 digest = { version = "0.10", optional = true }
@@ -34,6 +35,7 @@ sha2 = { version = "0.10", default-features = false, optional = true }
 hmac = { version = "0.12", optional = true, features = ["reset"] }
 aes = { version = "0.8", optional = true }
 des = { version = "0.8", optional = true }
+rand_core = { version = "0.10", optional = true }
 
 [dev-dependencies]
 hex = "0.4"

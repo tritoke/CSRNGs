@@ -232,3 +232,76 @@ impl Policy {
         }
     }
 }
+
+#[cfg(feature = "try-crypto-rng")]
+mod rand_core_impls {
+    use super::*;
+
+    // impl rand_core::TryRng and rand_core::TryCryptoRng for a type $drbg
+    macro_rules! impl_rand_core_traits {
+        ($drbg:ty) => {
+            impl rand_core::TryRng for $drbg {
+                type Error = SeedError;
+
+                fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+                    let mut bytes = [0; 4];
+                    self.generate(&mut bytes)?;
+                    Ok(u32::from_ne_bytes(bytes))
+                }
+
+                fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+                    let mut bytes = [0; 8];
+                    self.generate(&mut bytes)?;
+                    Ok(u64::from_ne_bytes(bytes))
+                }
+
+                fn try_fill_bytes(&mut self, dst: &mut [u8]) -> Result<(), Self::Error> {
+                    self.generate(dst)
+                }
+            }
+
+            impl rand_core::TryCryptoRng for $drbg {}
+        };
+    }
+
+    // impl rand_core::TryRng and rand_core::TryCryptoRng for many types
+    macro_rules! impl_rand_core_traits_many {
+        ($($drbg:ty),+ $(,)?) => {
+            $(
+                impl_rand_core_traits!($drbg);
+            )*
+        };
+    }
+
+    #[cfg(feature = "aes-ctr")]
+    impl_rand_core_traits_many!(AesCtr128Drbg, AesCtr192Drbg, AesCtr256Drbg);
+
+    #[cfg(feature = "tdea-ctr")]
+    impl_rand_core_traits!(TdeaCtrDrbg);
+
+    #[cfg(feature = "sha1")]
+    impl_rand_core_traits!(Sha1Drbg);
+
+    #[cfg(feature = "sha2")]
+    impl_rand_core_traits_many!(
+        Sha224Drbg,
+        Sha512_224Drbg,
+        Sha256Drbg,
+        Sha512_256Drbg,
+        Sha384Drbg,
+        Sha512Drbg,
+    );
+
+    #[cfg(feature = "hmac-sha1")]
+    impl_rand_core_traits!(HmacSha1Drbg);
+
+    #[cfg(feature = "hmac-sha2")]
+    impl_rand_core_traits_many!(
+        HmacSha224Drbg,
+        HmacSha512_224Drbg,
+        HmacSha256Drbg,
+        HmacSha512_256Drbg,
+        HmacSha384Drbg,
+        HmacSha512Drbg,
+    );
+}
