@@ -1,494 +1,388 @@
-use std::path::Path;
-
 use nist_drbg_rs::{
-    AesCtr128Drbg, AesCtr192Drbg, AesCtr256Drbg, Drbg, HmacSha1Drbg, HmacSha224Drbg,
+    Aes128CtrDrbg, Aes192CtrDrbg, Aes256CtrDrbg, Drbg, HmacSha1Drbg, HmacSha224Drbg,
     HmacSha256Drbg, HmacSha384Drbg, HmacSha512_224Drbg, HmacSha512_256Drbg, HmacSha512Drbg, Policy,
     PredictionResistance, Sha1Drbg, Sha224Drbg, Sha256Drbg, Sha384Drbg, Sha512_224Drbg,
     Sha512_256Drbg, Sha512Drbg, TdeaCtrDrbg,
 };
 
-#[derive(Debug, Clone, Default)]
-pub struct TestInformation {
-    algorithm_name: String,
-    prediction_resistance: bool,
-    entropy_input_len: usize,
-    nonce_len: usize,
-    personalization_string_len: usize,
-    additional_input_len: usize,
-    returned_bits_len: usize,
-}
+// define a known answer test (KAT) from a test class and a test file
+macro_rules! impl_kat {
+    (class = $test_class:tt, $test_file:tt) => {{
+        impl_kat!(@define_questions $test_class, $test_file);
 
-#[derive(Debug, Clone, Default)]
-pub struct Question {
-    count: usize,
-    entropy_input: Vec<u8>,
-    nonce: Vec<u8>,
-    personalization_string: Vec<u8>,
-    entropy_input_reseed: Vec<u8>,
-    entropy_input_pr_1: Vec<u8>,
-    entropy_input_pr_2: Vec<u8>,
-    additional_input_reseed: Vec<u8>,
-    additional_input_1: Vec<u8>,
-    additional_input_2: Vec<u8>,
-    returned_bytes: Vec<u8>,
-}
+        let mut buf = [0u8; 2048 / 8];
+        for question in QUESTIONS {
+            let policy = impl_kat!(@policy $test_class);
+            let mut drbg = impl_kat!(@instantiate_drbg $test_file, question, policy);
 
-fn parse_bool(input: &str) -> bool {
-    match input {
-        "True" => true,
-        "False" => false,
-        _ => panic!("Unexpected key: {input:?}"),
-    }
-}
+            // For pr_false we reseed before requesting any bytes at all
+            impl_kat!(@reseed_cond $test_class, drbg, question);
 
-fn parse_test_information(block: &str, info: &mut TestInformation) {
-    for line in block.lines() {
-        let data = line.trim_matches(|c| c == '[' || c == ']');
-        // For the first line we just get the algorithm name
-        if !data.contains("=") {
-            info.algorithm_name = data.to_string();
-        } else {
-            let (name, value) = data.split_once(" = ").unwrap();
-            match name {
-                "PredictionResistance" => info.prediction_resistance = parse_bool(value),
-                "EntropyInputLen" => info.entropy_input_len = value.parse().unwrap(),
-                "NonceLen" => info.nonce_len = value.parse().unwrap(),
-                "PersonalizationStringLen" => {
-                    info.personalization_string_len = value.parse().unwrap()
-                }
-                "AdditionalInputLen" => info.additional_input_len = value.parse().unwrap(),
-                "ReturnedBitsLen" => info.returned_bits_len = value.parse().unwrap(),
-                _ => panic!("Unexpected key: {name:?}"),
-            }
+            let generated_bits = &mut buf[..question.returned_bits.len()];
+            impl_kat!(@generate $test_class, drbg, question, generated_bits);
+
+            assert_eq!(generated_bits, question.returned_bits);
         }
-    }
-}
+    }};
 
-fn parse_question_block(block: &str, question: &mut Question) {
-    // We need to parse two fields with the same name in the KAT file
-    let mut addition_input_seen = false;
-    let mut entropy_pr_seen = false;
+    (@policy "drbgvectors_pr_true") => { Policy::default().with_prediction_resistance(PredictionResistance::Enabled) };
+    (@policy $_:tt) => { Policy::default().with_prediction_resistance(PredictionResistance::Disabled) };
 
-    for line in block.lines() {
-        let (name, value) = line.split_once(" = ").unwrap();
-        match name {
-            "COUNT" => question.count = value.parse().unwrap(),
-            "EntropyInput" => question.entropy_input = hex::decode(value).unwrap(),
-            "Nonce" => question.nonce = hex::decode(value).unwrap(),
-            "PersonalizationString" => {
-                question.personalization_string = hex::decode(value).unwrap()
-            }
-            "EntropyInputReseed" => question.entropy_input_reseed = hex::decode(value).unwrap(),
-            "AdditionalInputReseed" => {
-                question.additional_input_reseed = hex::decode(value).unwrap()
-            }
-            "AdditionalInput" => {
-                if addition_input_seen {
-                    question.additional_input_2 = hex::decode(value).unwrap();
-                } else {
-                    question.additional_input_1 = hex::decode(value).unwrap();
-                    addition_input_seen = true;
-                }
-            }
-            "EntropyInputPR" => {
-                if entropy_pr_seen {
-                    question.entropy_input_pr_2 = hex::decode(value).unwrap();
-                } else {
-                    question.entropy_input_pr_1 = hex::decode(value).unwrap();
-                    entropy_pr_seen = true;
-                }
-            }
-            "ReturnedBits" => question.returned_bytes = hex::decode(value).unwrap(),
-            _ => panic!("Unexpected key: {name:?}"),
-        }
-    }
-}
-
-fn create_hash_drbg_from_name(question: &Question, info: &TestInformation) -> Box<dyn Drbg> {
-    let policy = if info.prediction_resistance {
-        Policy::default().with_prediction_resistance(PredictionResistance::Enabled)
-    } else {
-        Policy::default().with_prediction_resistance(PredictionResistance::Disabled)
+    (@reseed_cond "drbgvectors_pr_false", $drbg:ident, $question:ident) => {
+        $drbg.reseed_ctx(
+            &$question.entropy_input_reseed,
+            &$question.additional_input_reseed,
+        ).unwrap();
     };
-    let drbg: Box<dyn Drbg> = match info.algorithm_name.as_str() {
-        "SHA-1" => Box::new(
-            Sha1Drbg::new(
-                &question.entropy_input,
-                &question.nonce,
-                &question.personalization_string,
-                policy,
-            )
-            .unwrap(),
-        ),
-        "SHA-224" => Box::new(
-            Sha224Drbg::new(
-                &question.entropy_input,
-                &question.nonce,
-                &question.personalization_string,
-                policy,
-            )
-            .unwrap(),
-        ),
-        "SHA-256" => Box::new(
-            Sha256Drbg::new(
-                &question.entropy_input,
-                &question.nonce,
-                &question.personalization_string,
-                policy,
-            )
-            .unwrap(),
-        ),
-        "SHA-384" => Box::new(
-            Sha384Drbg::new(
-                &question.entropy_input,
-                &question.nonce,
-                &question.personalization_string,
-                policy,
-            )
-            .unwrap(),
-        ),
-        "SHA-512" => Box::new(
-            Sha512Drbg::new(
-                &question.entropy_input,
-                &question.nonce,
-                &question.personalization_string,
-                policy,
-            )
-            .unwrap(),
-        ),
-        "SHA-512/224" => Box::new(
-            Sha512_224Drbg::new(
-                &question.entropy_input,
-                &question.nonce,
-                &question.personalization_string,
-                policy,
-            )
-            .unwrap(),
-        ),
-        "SHA-512/256" => Box::new(
-            Sha512_256Drbg::new(
-                &question.entropy_input,
-                &question.nonce,
-                &question.personalization_string,
-                policy,
-            )
-            .unwrap(),
-        ),
-        _ => panic!("Unexpected algorithm: {:?}", info.algorithm_name.as_str()),
+    (@reseed_cond $_:tt, $_drbg:ident, $_question:ident) => {};
+
+    // When we use predicition resistence, the additional bytes are used for reseeding and not the generation
+    (@generate "drbgvectors_pr_true", $drbg:ident, $question:ident, $generated_bits:ident) => {
+        // Request the first chunk of bytes
+        $drbg.reseed_ctx(&$question.entropy_input_pr_1, &$question.additional_input_1)
+            .unwrap();
+        $drbg.generate($generated_bits).unwrap();
+
+        // Request the second chunk of bytes
+        $drbg.reseed_ctx(&$question.entropy_input_pr_2, &$question.additional_input_2)
+            .unwrap();
+        $drbg.generate($generated_bits).unwrap();
     };
-    drbg
-}
 
-fn create_hmac_drbg_from_name(question: &Question, info: &TestInformation) -> Box<dyn Drbg> {
-    let policy = if info.prediction_resistance {
-        Policy::default().with_prediction_resistance(PredictionResistance::Enabled)
-    } else {
-        Policy::default().with_prediction_resistance(PredictionResistance::Disabled)
+    // For all other cases, additional bytes are used in the reseeding itself
+    (@generate $_:tt, $drbg:ident, $question:ident, $generated_bits:ident) => {
+        // Request the first chunk of bytes
+        $drbg.generate_ctx($generated_bits, &$question.additional_input_1)
+            .unwrap();
+
+        // Request the second chunk of bytes
+        $drbg.generate_ctx($generated_bits, &$question.additional_input_2)
+            .unwrap();
     };
-    let drbg: Box<dyn Drbg> = match info.algorithm_name.as_str() {
-        "SHA-1" => Box::new(
-            HmacSha1Drbg::new(
-                &question.entropy_input,
-                &question.nonce,
-                &question.personalization_string,
-                policy,
-            )
-            .unwrap(),
-        ),
-        "SHA-224" => Box::new(
-            HmacSha224Drbg::new(
-                &question.entropy_input,
-                &question.nonce,
-                &question.personalization_string,
-                policy,
-            )
-            .unwrap(),
-        ),
-        "SHA-256" => Box::new(
-            HmacSha256Drbg::new(
-                &question.entropy_input,
-                &question.nonce,
-                &question.personalization_string,
-                policy,
-            )
-            .unwrap(),
-        ),
-        "SHA-384" => Box::new(
-            HmacSha384Drbg::new(
-                &question.entropy_input,
-                &question.nonce,
-                &question.personalization_string,
-                policy,
-            )
-            .unwrap(),
-        ),
-        "SHA-512" => Box::new(
-            HmacSha512Drbg::new(
-                &question.entropy_input,
-                &question.nonce,
-                &question.personalization_string,
-                policy,
-            )
-            .unwrap(),
-        ),
-        "SHA-512/224" => Box::new(
-            HmacSha512_224Drbg::new(
-                &question.entropy_input,
-                &question.nonce,
-                &question.personalization_string,
-                policy,
-            )
-            .unwrap(),
-        ),
-        "SHA-512/256" => Box::new(
-            HmacSha512_256Drbg::new(
-                &question.entropy_input,
-                &question.nonce,
-                &question.personalization_string,
-                policy,
-            )
-            .unwrap(),
-        ),
-        _ => panic!("Unexpected algorithm: {:?}", info.algorithm_name.as_str()),
+
+    // match on the DRBG name and pick the appropriate type to instantiate
+    (@drbg_type "3KeyTDEA_no_df")   => { TdeaCtrDrbg };
+    (@drbg_type "3KeyTDEA_use_df")  => { TdeaCtrDrbg };
+    (@drbg_type "AES-128_no_df")    => { Aes128CtrDrbg };
+    (@drbg_type "AES-128_use_df")   => { Aes128CtrDrbg };
+    (@drbg_type "AES-192_no_df")    => { Aes192CtrDrbg };
+    (@drbg_type "AES-192_use_df")   => { Aes192CtrDrbg };
+    (@drbg_type "AES-256_no_df")    => { Aes256CtrDrbg };
+    (@drbg_type "AES-256_use_df")   => { Aes256CtrDrbg };
+    (@drbg_type "Hash_SHA-1")       => { Sha1Drbg };
+    (@drbg_type "Hash_SHA-224")     => { Sha224Drbg };
+    (@drbg_type "Hash_SHA-256")     => { Sha256Drbg };
+    (@drbg_type "Hash_SHA-384")     => { Sha384Drbg };
+    (@drbg_type "Hash_SHA-512")     => { Sha512Drbg };
+    (@drbg_type "Hash_SHA-512_224") => { Sha512_224Drbg };
+    (@drbg_type "Hash_SHA-512_256") => { Sha512_256Drbg };
+    (@drbg_type "HMAC_SHA-1")       => { HmacSha1Drbg };
+    (@drbg_type "HMAC_SHA-224")     => { HmacSha224Drbg };
+    (@drbg_type "HMAC_SHA-256")     => { HmacSha256Drbg };
+    (@drbg_type "HMAC_SHA-384")     => { HmacSha384Drbg };
+    (@drbg_type "HMAC_SHA-512")     => { HmacSha512Drbg };
+    (@drbg_type "HMAC_SHA-512_224") => { HmacSha512_224Drbg };
+    (@drbg_type "HMAC_SHA-512_256") => { HmacSha512_256Drbg };
+
+    // pattern match on the CTR DRBGs as they require a special constructors
+    (@instantiate_drbg "3KeyTDEA_no_df", $question:ident, $policy:ident) => {
+        impl_kat!(@instantiate_ctr_drbg "3KeyTDEA_no_df", $question, $policy)
     };
-    drbg
-}
-
-fn create_ctr_drbg_from_name(question: &Question, info: &TestInformation) -> Box<dyn Drbg> {
-    let policy = if info.prediction_resistance {
-        Policy::default().with_prediction_resistance(PredictionResistance::Enabled)
-    } else {
-        Policy::default().with_prediction_resistance(PredictionResistance::Disabled)
+    (@instantiate_drbg "AES-128_no_df",  $question:ident, $policy:ident) => {
+        impl_kat!(@instantiate_ctr_drbg "AES-128_no_df",  $question, $policy)
     };
-    let drbg: Box<dyn Drbg> = match info.algorithm_name.as_str() {
-        "3KeyTDEA use df" => Box::new(
-            TdeaCtrDrbg::new_with_df(
-                &question.entropy_input,
-                &question.nonce,
-                &question.personalization_string,
-                policy,
-            )
-            .unwrap(),
-        ),
-        "3KeyTDEA no df" => Box::new(
-            TdeaCtrDrbg::new(
-                &question.entropy_input,
-                &question.personalization_string,
-                policy,
-            )
-            .unwrap(),
-        ),
-        "AES-128 use df" => Box::new(
-            AesCtr128Drbg::new_with_df(
-                &question.entropy_input,
-                &question.nonce,
-                &question.personalization_string,
-                policy,
-            )
-            .unwrap(),
-        ),
-        "AES-128 no df" => Box::new(
-            AesCtr128Drbg::new(
-                &question.entropy_input,
-                &question.personalization_string,
-                policy,
-            )
-            .unwrap(),
-        ),
-        "AES-192 use df" => Box::new(
-            AesCtr192Drbg::new_with_df(
-                &question.entropy_input,
-                &question.nonce,
-                &question.personalization_string,
-                policy,
-            )
-            .unwrap(),
-        ),
-        "AES-192 no df" => Box::new(
-            AesCtr192Drbg::new(
-                &question.entropy_input,
-                &question.personalization_string,
-                policy,
-            )
-            .unwrap(),
-        ),
-        "AES-256 use df" => Box::new(
-            AesCtr256Drbg::new_with_df(
-                &question.entropy_input,
-                &question.nonce,
-                &question.personalization_string,
-                policy,
-            )
-            .unwrap(),
-        ),
-        "AES-256 no df" => Box::new(
-            AesCtr256Drbg::new(
-                &question.entropy_input,
-                &question.personalization_string,
-                policy,
-            )
-            .unwrap(),
-        ),
-        _ => panic!("Unexpected algorithm: {:?}", info.algorithm_name.as_str()),
+    (@instantiate_drbg "AES-192_no_df",  $question:ident, $policy:ident) => {
+        impl_kat!(@instantiate_ctr_drbg "AES-192_no_df",  $question, $policy)
     };
-    drbg
-}
+    (@instantiate_drbg "AES-256_no_df",  $question:ident, $policy:ident) => {
+        impl_kat!(@instantiate_ctr_drbg "AES-256_no_df",  $question, $policy)
+    };
+    (@instantiate_drbg "3KeyTDEA_use_df", $question:ident, $policy:ident) => {
+        impl_kat!(@instantiate_ctr_drbg_with_df "3KeyTDEA_use_df", $question, $policy)
+    };
+    (@instantiate_drbg "AES-128_use_df",  $question:ident, $policy:ident) => {
+        impl_kat!(@instantiate_ctr_drbg_with_df "AES-128_use_df",  $question, $policy)
+    };
+    (@instantiate_drbg "AES-192_use_df",  $question:ident, $policy:ident) => {
+        impl_kat!(@instantiate_ctr_drbg_with_df "AES-192_use_df",  $question, $policy)
+    };
+    (@instantiate_drbg "AES-256_use_df",  $question:ident, $policy:ident) => {
+        impl_kat!(@instantiate_ctr_drbg_with_df "AES-256_use_df",  $question, $policy)
+    };
 
-fn perform_kat_test(question: &Question, info: &TestInformation, reseed: bool, name: &str) -> bool {
-    let mut passed = true;
-
-    // Ensure all lengths match
-    passed &= question.entropy_input.len() * 8 == info.entropy_input_len;
-    passed &= question.nonce.len() * 8 == info.nonce_len;
-    passed &= question.personalization_string.len() * 8 == info.personalization_string_len;
-    passed &= question.additional_input_1.len() * 8 == info.additional_input_len;
-    passed &= question.additional_input_2.len() * 8 == info.additional_input_len;
-    passed &= question.returned_bytes.len() * 8 == info.returned_bits_len;
-
-    // For the pr_false tests, we have reseeding values which we must check
-    if reseed {
-        passed &= question.entropy_input_reseed.len() * 8 == info.entropy_input_len;
-        passed &= question.additional_input_reseed.len() * 8 == info.additional_input_len;
-    }
-
-    // When prediction resistance is required we have two other entropy inputs
-    if info.prediction_resistance {
-        passed &= question.entropy_input_pr_1.len() * 8 == info.entropy_input_len;
-        passed &= question.entropy_input_pr_2.len() * 8 == info.entropy_input_len;
-    }
-
-    // buffer to read bytes into
-    let mut generated_bytes = vec![0; info.returned_bits_len / 8];
-
-    // Create the correct Drbg from the algorithm name
-    let mut drbg;
-    match name {
-        "Hash" => drbg = create_hash_drbg_from_name(question, info),
-        "HMAC" => drbg = create_hmac_drbg_from_name(question, info),
-        "CTR" => drbg = create_ctr_drbg_from_name(question, info),
-        _ => panic!("Unexpected name: {name}"),
-    }
-
-    // For pr_false we reseed before requesting any bytes at all
-    if reseed {
-        drbg.reseed_ctx(
-            &question.entropy_input_reseed,
-            &question.additional_input_reseed,
+    // instantiate the hmac/hash DRBGs normally
+    (@instantiate_drbg $drbg:tt, $question:ident, $policy:ident) => {
+        <impl_kat!(@drbg_type $drbg)>::new(
+            &$question.entropy_input,
+            &$question.nonce,
+            &$question.personalization_string,
+            $policy,
         )
         .unwrap()
-    }
+    };
 
-    // When we use predicition resistence, the additional bytes are used for reseeding
-    // and not the generation
-    if info.prediction_resistance {
-        // Request the first chunk of bytes
-        drbg.reseed_ctx(&question.entropy_input_pr_1, &question.additional_input_1)
-            .unwrap();
-        drbg.generate(&mut generated_bytes).unwrap();
+    // instantiate the ctr DRBGs normally
+    (@instantiate_ctr_drbg $drbg:tt, $question:ident, $policy:ident) => {
+        <impl_kat!(@drbg_type $drbg)>::new(
+            &$question.entropy_input,
+            &$question.personalization_string,
+            $policy,
+        )
+        .unwrap()
+    };
 
-        // Request the second chunk of bytes
-        drbg.reseed_ctx(&question.entropy_input_pr_2, &question.additional_input_2)
-            .unwrap();
-        drbg.generate(&mut generated_bytes).unwrap();
-    }
-    // For all other cases, additional bytes are used in the reseeding itself
-    else {
-        // Request the first chunk of bytes
-        drbg.generate_ctx(&mut generated_bytes, &question.additional_input_1)
-            .unwrap();
-        // Request the second chunk of bytes
-        drbg.generate_ctx(&mut generated_bytes, &question.additional_input_2)
-            .unwrap();
-    }
+    // instantiate the ctr DRBG with a derivation function
+    (@instantiate_ctr_drbg_with_df $drbg:tt, $question:ident, $policy:ident) => {
+        <impl_kat!(@drbg_type $drbg)>::new_with_df(
+            &$question.entropy_input,
+            &$question.nonce,
+            &$question.personalization_string,
+            $policy,
+        )
+        .unwrap()
+    };
 
-    // Ensure the bytes match
-    passed &= question.returned_bytes == generated_bytes;
-    passed
+    // parse questions from the drbgvectors_no_reseed directory
+    (@define_questions "drbgvectors_no_reseed", $test_file:literal) => {
+        blobby::parse_into_structs!(
+            include_bytes!(concat!("../assets/drbgvectors_no_reseed/", $test_file, ".blb"));
+            #[define_struct]
+            static QUESTIONS: &[Kat {
+                entropy_input,
+                nonce,
+                personalization_string,
+                additional_input_1,
+                additional_input_2,
+                returned_bits,
+            }];
+        );
+    };
+
+    // parse questions from the drbgvectors_pr_false directory
+    (@define_questions "drbgvectors_pr_false", $test_file:literal) => {
+        blobby::parse_into_structs!(
+            include_bytes!(concat!("../assets/drbgvectors_pr_false/", $test_file, ".blb"));
+            #[define_struct]
+            static QUESTIONS: &[Kat {
+                entropy_input,
+                nonce,
+                personalization_string,
+                entropy_input_reseed,
+                additional_input_reseed,
+                additional_input_1,
+                additional_input_2,
+                returned_bits,
+            }];
+        );
+    };
+
+    // parse questions from the drbgvectors_pr_true directory
+    (@define_questions "drbgvectors_pr_true", $test_file:literal) => {
+        blobby::parse_into_structs!(
+            include_bytes!(concat!("../assets/drbgvectors_pr_true/", $test_file, ".blb"));
+            #[define_struct]
+            static QUESTIONS: &[Kat {
+                entropy_input,
+                nonce,
+                personalization_string,
+                additional_input_1,
+                entropy_input_pr_1,
+                additional_input_2,
+                entropy_input_pr_2,
+                returned_bits,
+            }];
+        );
+    };
 }
 
-fn run_kat_test(kat_type: &str, name: &str) {
-    // Whether or not to explicitly reseed
-    let reseed = kat_type.contains("pr_false");
-
-    // Load the KAT file as a string
-    let response_file = Path::new("assets")
-        .join(kat_type)
-        .join(format!("{}_DRBG.rsp", name));
-    let contents = std::fs::read_to_string(response_file).unwrap();
-
-    // Create structs which contain the test information and question data
-    let mut info_block = TestInformation::default();
-    let mut question_block = Question::default();
-
-    // Iterate through each KAT block
-    for block in contents.split("\n\n") {
-        // Ignore the metadata or empty blocks
-        if block.starts_with('#') || block.is_empty() {
-            continue;
-        }
-        // Parse the KAT data values for the question
-        else if block.starts_with('[') {
-            parse_test_information(block, &mut info_block);
-        }
-        // Subsequent blocks are then question blocks which we parse and then test
-        else {
-            parse_question_block(block, &mut question_block);
-            let test_passed = perform_kat_test(&question_block, &info_block, reseed, name);
-            assert!(test_passed);
-        }
+// instantiate many KAT tests of a single class
+macro_rules! impl_kat_many {
+    (class = $test_class:tt, $($test_file:tt),+ $(,)?) => {
+        $(
+            impl_kat!(class = $test_class, $test_file);
+        )*
     }
 }
 
 #[test]
+#[cfg(any(feature = "sha1", feature = "sha2"))]
 /// Test KAT values for Hash Drbg with no reseeding
 fn test_hash_kat_no_reseed() {
-    run_kat_test("drbgvectors_no_reseed", "Hash");
+    #[cfg(feature = "sha1")]
+    impl_kat!(class = "drbgvectors_no_reseed", "Hash_SHA-1");
+
+    #[cfg(feature = "sha2")]
+    impl_kat_many!(
+        class = "drbgvectors_no_reseed",
+        "Hash_SHA-224",
+        "Hash_SHA-256",
+        "Hash_SHA-384",
+        "Hash_SHA-512",
+        "Hash_SHA-512_224",
+        "Hash_SHA-512_256",
+    );
 }
 
 #[test]
+#[cfg(any(feature = "sha1", feature = "sha2"))]
 /// Test KAT values for Hash Drbg with explicit reseeding
 fn test_hash_kat_pr_false() {
-    run_kat_test("drbgvectors_pr_false", "Hash");
+    #[cfg(feature = "sha1")]
+    impl_kat!(class = "drbgvectors_pr_false", "Hash_SHA-1");
+
+    #[cfg(feature = "sha2")]
+    impl_kat_many!(
+        class = "drbgvectors_pr_false",
+        "Hash_SHA-224",
+        "Hash_SHA-256",
+        "Hash_SHA-384",
+        "Hash_SHA-512",
+        "Hash_SHA-512_224",
+        "Hash_SHA-512_256",
+    );
 }
 
 #[test]
+#[cfg(any(feature = "sha1", feature = "sha2"))]
 /// Test KAT values for Hash Drbg with reseeding before extraction
 fn test_hash_kat_pr_true() {
-    run_kat_test("drbgvectors_pr_true", "Hash");
+    #[cfg(feature = "sha1")]
+    impl_kat!(class = "drbgvectors_pr_true", "Hash_SHA-1");
+
+    #[cfg(feature = "sha2")]
+    impl_kat_many!(
+        class = "drbgvectors_pr_true",
+        "Hash_SHA-224",
+        "Hash_SHA-256",
+        "Hash_SHA-384",
+        "Hash_SHA-512",
+        "Hash_SHA-512_224",
+        "Hash_SHA-512_256",
+    );
 }
 
 #[test]
+#[cfg(any(feature = "hmac-sha1", feature = "hmac-sha2"))]
 /// Test KAT values for HMAC Drbg with no reseeding
 fn test_hmac_kat_no_reseed() {
-    run_kat_test("drbgvectors_no_reseed", "HMAC");
+    #[cfg(feature = "hmac-sha1")]
+    impl_kat!(class = "drbgvectors_no_reseed", "HMAC_SHA-1");
+
+    #[cfg(feature = "hmac-sha2")]
+    impl_kat_many!(
+        class = "drbgvectors_no_reseed",
+        "HMAC_SHA-224",
+        "HMAC_SHA-256",
+        "HMAC_SHA-384",
+        "HMAC_SHA-512",
+        "HMAC_SHA-512_224",
+        "HMAC_SHA-512_256",
+    );
 }
 
 #[test]
+#[cfg(any(feature = "hmac-sha1", feature = "hmac-sha2"))]
 /// Test KAT values for HMAC Drbg with reseeding before extraction
 fn test_hmac_kat_pr_false() {
-    run_kat_test("drbgvectors_pr_false", "HMAC");
+    #[cfg(feature = "hmac-sha1")]
+    impl_kat!(class = "drbgvectors_pr_false", "HMAC_SHA-1");
+
+    #[cfg(feature = "hmac-sha2")]
+    impl_kat_many!(
+        class = "drbgvectors_pr_false",
+        "HMAC_SHA-224",
+        "HMAC_SHA-256",
+        "HMAC_SHA-384",
+        "HMAC_SHA-512",
+        "HMAC_SHA-512_224",
+        "HMAC_SHA-512_256",
+    );
 }
 
 #[test]
+#[cfg(any(feature = "hmac-sha1", feature = "hmac-sha2"))]
 /// Test KAT values for HMAC Drbg with reseeding before extraction
 fn test_hmac_kat_pr_true() {
-    run_kat_test("drbgvectors_pr_true", "HMAC");
+    #[cfg(feature = "hmac-sha1")]
+    impl_kat!(class = "drbgvectors_pr_true", "HMAC_SHA-1");
+
+    #[cfg(feature = "hmac-sha2")]
+    impl_kat_many!(
+        class = "drbgvectors_pr_true",
+        "HMAC_SHA-224",
+        "HMAC_SHA-256",
+        "HMAC_SHA-384",
+        "HMAC_SHA-512",
+        "HMAC_SHA-512_224",
+        "HMAC_SHA-512_256",
+    );
 }
 
 #[test]
+#[cfg(any(feature = "aes-ctr", feature = "tdea-ctr"))]
 /// Test KAT values for CTR Drbg with no reseeding
 fn test_ctr_kat_no_reseed() {
-    run_kat_test("drbgvectors_no_reseed", "CTR");
+    #[cfg(feature = "tdea-ctr")]
+    impl_kat_many!(
+        class = "drbgvectors_no_reseed",
+        "3KeyTDEA_no_df",
+        "3KeyTDEA_use_df"
+    );
+
+    #[cfg(feature = "aes-ctr")]
+    impl_kat_many!(
+        class = "drbgvectors_no_reseed",
+        "AES-128_no_df",
+        "AES-128_use_df",
+        "AES-192_no_df",
+        "AES-192_use_df",
+        "AES-256_no_df",
+        "AES-256_use_df",
+    );
 }
 
 #[test]
+#[cfg(any(feature = "aes-ctr", feature = "tdea-ctr"))]
 /// Test KAT values for CTR Drbg with reseeding before extraction
 fn test_ctr_kat_pr_false() {
-    run_kat_test("drbgvectors_pr_false", "CTR");
+    #[cfg(feature = "tdea-ctr")]
+    impl_kat_many!(
+        class = "drbgvectors_pr_false",
+        "3KeyTDEA_no_df",
+        "3KeyTDEA_use_df"
+    );
+
+    #[cfg(feature = "aes-ctr")]
+    impl_kat_many!(
+        class = "drbgvectors_pr_false",
+        "AES-128_no_df",
+        "AES-128_use_df",
+        "AES-192_no_df",
+        "AES-192_use_df",
+        "AES-256_no_df",
+        "AES-256_use_df",
+    );
 }
 
 #[test]
+#[cfg(any(feature = "aes-ctr", feature = "tdea-ctr"))]
 /// Test KAT values for CTR Drbg with reseeding before extraction
 fn test_ctr_kat_pr_true() {
-    run_kat_test("drbgvectors_pr_true", "CTR");
+    #[cfg(feature = "tdea-ctr")]
+    impl_kat_many!(
+        class = "drbgvectors_pr_true",
+        "3KeyTDEA_no_df",
+        "3KeyTDEA_use_df"
+    );
+
+    #[cfg(feature = "aes-ctr")]
+    impl_kat_many!(
+        class = "drbgvectors_pr_true",
+        "AES-128_no_df",
+        "AES-128_use_df",
+        "AES-192_no_df",
+        "AES-192_use_df",
+        "AES-256_no_df",
+        "AES-256_use_df",
+    );
 }

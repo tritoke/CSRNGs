@@ -1,4 +1,4 @@
-use nist_drbg_rs::{AesCtr128Drbg, HmacSha1Drbg, Sha1Drbg, TdeaCtrDrbg};
+use nist_drbg_rs::{Aes128CtrDrbg, HmacSha1Drbg, Sha1Drbg, TdeaCtrDrbg};
 use nist_drbg_rs::{Drbg, Policy};
 
 use hex_lit::hex;
@@ -102,7 +102,7 @@ fn test_aes_ctr() {
     let returned_bytes: &[u8] = &hex!(
         "6545c0529d372443b392ceb3ae3a99a30f963eaf313280f1d1a1e87f9db373d361e75d18018266499cccd64d9bbb8de0185f213383080faddec46bae1f784e5a"
     );
-    let mut drbg = AesCtr128Drbg::new(entropy, &[], Policy::default()).unwrap();
+    let mut drbg = Aes128CtrDrbg::new(entropy, &[], Policy::default()).unwrap();
 
     let mut buf: [u8; 64] = [0; 64];
     let _ = drbg.generate(&mut buf);
@@ -118,7 +118,7 @@ fn test_aes_ctr_add() {
     let returned_bytes: &[u8] = &hex!(
         "5b2bf7a5c60d8ab6591110cbd61cd387b02de19784f496d1a109123d8b3562a5de2dd6d5d1aef957a6c4f371cecd93c15799d82e34d6a0dba7e915a27d8e65f3"
     );
-    let mut drbg = AesCtr128Drbg::new(entropy, &[], Policy::default()).unwrap();
+    let mut drbg = Aes128CtrDrbg::new(entropy, &[], Policy::default()).unwrap();
 
     let mut buf: [u8; 64] = [0; 64];
     let _ = drbg.generate_ctx(&mut buf, add1);
@@ -133,7 +133,7 @@ fn test_aes_ctr_df() {
     let returned_bytes: &[u8] = &hex!(
         "a5514ed7095f64f3d0d3a5760394ab42062f373a25072a6ea6bcfd8489e94af6cf18659fea22ed1ca0a9e33f718b115ee536b12809c31b72b08ddd8be1910fa3"
     );
-    let mut drbg = AesCtr128Drbg::new_with_df(entropy, nonce, &[], Policy::default()).unwrap();
+    let mut drbg = Aes128CtrDrbg::new_with_df(entropy, nonce, &[], Policy::default()).unwrap();
 
     let mut buf: [u8; 64] = [0; 64];
     let _ = drbg.generate(&mut buf);
@@ -150,7 +150,7 @@ fn test_aes_ctr_df_ps() {
         "35b00df6269b6641fd4ccb354d56d851de7a77527e034d60c9e1a9e1525a30ed361fded89d3dccb978d4e7a9e100ebf63062735b52831c6f0a1d3e1bdc5ebc72"
     );
     let mut drbg =
-        AesCtr128Drbg::new_with_df(entropy, nonce, personalization_string, Policy::default())
+        Aes128CtrDrbg::new_with_df(entropy, nonce, personalization_string, Policy::default())
             .unwrap();
 
     let mut buf: [u8; 64] = [0; 64];

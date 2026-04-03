@@ -38,5 +38,6 @@ des = { version = "0.8", default-features = false, optional = true }
 rand_core = { version = "0.10", optional = true }
 
 [dev-dependencies]
+blobby = "0.4"
 hex = "0.4"
 hex_lit = "0.1"

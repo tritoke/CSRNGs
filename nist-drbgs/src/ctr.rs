@@ -605,7 +605,7 @@ impl KeySizeUser for TdesEde3ShortKey {
 }
 
 impl KeyInit for TdesEde3ShortKey {
-    fn new(key: &digest::Key<Self>) -> Self {
+    fn new(key: &GenericArray<u8, U21>) -> Self {
         let mut wide_key: GenericArray<u8, U24> = GenericArray::default();
         derive_tdea_key(key, &mut wide_key);
         Self(TdesEde3::new(&wide_key))
@@ -650,10 +650,10 @@ fn derive_des_key(out_key: &mut [u8], in_key: &[u8]) {
 pub type TdeaCtrDrbg = super::CtrDrbg<TdesEde3ShortKey, TdeaLimits, { 21 + 8 }>;
 
 #[cfg(feature = "aes-ctr")]
-pub type AesCtr128Drbg = super::CtrDrbg<Aes128, AesLimits, { 16 + 16 }>;
+pub type Aes128CtrDrbg = super::CtrDrbg<Aes128, AesLimits, { 16 + 16 }>;
 
 #[cfg(feature = "aes-ctr")]
-pub type AesCtr192Drbg = super::CtrDrbg<Aes192, AesLimits, { 24 + 16 }>;
+pub type Aes192CtrDrbg = super::CtrDrbg<Aes192, AesLimits, { 24 + 16 }>;
 
 #[cfg(feature = "aes-ctr")]
-pub type AesCtr256Drbg = super::CtrDrbg<Aes256, AesLimits, { 32 + 16 }>;
+pub type Aes256CtrDrbg = super::CtrDrbg<Aes256, AesLimits, { 32 + 16 }>;

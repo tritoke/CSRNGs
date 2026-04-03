@@ -1,6 +1,6 @@
 use core::marker::PhantomData;
-use digest::{FixedOutputReset, KeyInit, generic_array::GenericArray};
-use hmac::{Hmac, Mac};
+use digest::{FixedOutputReset, KeyInit, array::Array};
+use hmac::{HmacReset, Mac};
 
 use crate::{Drbg, Policy, PredictionResistance, SeedError, hash_security_size};
 
@@ -26,10 +26,10 @@ pub const HMAC_NIST_RESEED_INTERVAL: u64 = 10_000;
 
 pub struct HmacDrbg<H: Mac + KeyInit + FixedOutputReset> {
     // key - Value of `seedlen` bits
-    key: GenericArray<u8, H::OutputSize>,
+    key: Array<u8, H::OutputSize>,
 
     // V - Value of `seedlen` bits
-    value: GenericArray<u8, H::OutputSize>,
+    value: Array<u8, H::OutputSize>,
 
     // the number of requests for bits received since the last (re)seeding
     reseed_counter: u64,
@@ -92,8 +92,8 @@ impl<H: Mac + KeyInit + FixedOutputReset> HmacDrbg<H> {
             }
         }
 
-        let mut key = GenericArray::<u8, H::OutputSize>::default();
-        let mut value = GenericArray::<u8, H::OutputSize>::default();
+        let mut key = Array::<u8, H::OutputSize>::default();
+        let mut value = Array::<u8, H::OutputSize>::default();
 
         // Default key:   0x00 ... 0x00
         // Default value: 0x01 ... 0x01
@@ -114,7 +114,7 @@ impl<H: Mac + KeyInit + FixedOutputReset> HmacDrbg<H> {
     }
 
     fn new_mac(&self) -> H {
-        <H as Mac>::new_from_slice(&self.key).unwrap()
+        <H as KeyInit>::new_from_slice(&self.key).unwrap()
     }
 
     // Auxiliary function in section 10.1.2.2
@@ -269,22 +269,22 @@ impl<H: Mac + KeyInit + FixedOutputReset> Drbg for HmacDrbg<H> {
 }
 
 #[cfg(feature = "hmac-sha1")]
-pub type HmacSha1Drbg = super::HmacDrbg<Hmac<sha1::Sha1>>;
+pub type HmacSha1Drbg = super::HmacDrbg<HmacReset<sha1::Sha1>>;
 
 #[cfg(feature = "hmac-sha2")]
-pub type HmacSha224Drbg = super::HmacDrbg<Hmac<sha2::Sha224>>;
+pub type HmacSha224Drbg = super::HmacDrbg<HmacReset<sha2::Sha224>>;
 
 #[cfg(feature = "hmac-sha2")]
-pub type HmacSha512_224Drbg = super::HmacDrbg<Hmac<sha2::Sha512_224>>;
+pub type HmacSha512_224Drbg = super::HmacDrbg<HmacReset<sha2::Sha512_224>>;
 
 #[cfg(feature = "hmac-sha2")]
-pub type HmacSha256Drbg = super::HmacDrbg<Hmac<sha2::Sha256>>;
+pub type HmacSha256Drbg = super::HmacDrbg<HmacReset<sha2::Sha256>>;
 
 #[cfg(feature = "hmac-sha2")]
-pub type HmacSha512_256Drbg = super::HmacDrbg<Hmac<sha2::Sha512_256>>;
+pub type HmacSha512_256Drbg = super::HmacDrbg<HmacReset<sha2::Sha512_256>>;
 
 #[cfg(feature = "hmac-sha2")]
-pub type HmacSha384Drbg = super::HmacDrbg<Hmac<sha2::Sha384>>;
+pub type HmacSha384Drbg = super::HmacDrbg<HmacReset<sha2::Sha384>>;
 
 #[cfg(feature = "hmac-sha2")]
-pub type HmacSha512Drbg = super::HmacDrbg<Hmac<sha2::Sha512>>;
+pub type HmacSha512Drbg = super::HmacDrbg<HmacReset<sha2::Sha512>>;
