@@ -274,7 +274,7 @@ mod rand_core_impls {
     }
 
     #[cfg(feature = "aes-ctr")]
-    impl_rand_core_traits_many!(AesCtr128Drbg, AesCtr192Drbg, AesCtr256Drbg);
+    impl_rand_core_traits_many!(Aes128CtrDrbg, Aes192CtrDrbg, Aes256CtrDrbg);
 
     #[cfg(feature = "tdea-ctr")]
     impl_rand_core_traits!(TdeaCtrDrbg);
